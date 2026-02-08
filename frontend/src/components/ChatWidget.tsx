@@ -42,8 +42,8 @@ export default function ChatWidget() {
         setIsLoading(true);
 
         try {
-            // Assuming the backend runs on port 8000
-            const response = await fetch('http://localhost:8000/chat', {
+            // Updated to point to port 5000 and correct endpoint
+            const response = await fetch('http://localhost:5000/api/chat/message', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -60,7 +60,7 @@ export default function ChatWidget() {
             const botMessage: Message = {
                 id: Date.now().toString(), // unique id
                 sender: 'bot',
-                text: data.answer || "I'm sorry, I couldn't process that.",
+                text: data.response || "I'm sorry, I couldn't process that.",
             };
 
             setMessages((prev) => [...prev, botMessage]);

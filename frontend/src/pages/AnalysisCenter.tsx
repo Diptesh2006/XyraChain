@@ -1,13 +1,43 @@
-import { useState, useCallback} from 'react';
+import { useState, useCallback } from 'react';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
+import { useWallet } from '../context/WalletContext';
+import axios from 'axios';
+import { jsPDF } from 'jspdf';
+import { ethers } from 'ethers';
+import XyraChainArtifact from '../contracts/XyraChain.json';
+
+const BACKEND_URL = 'http://localhost:5000';
+const CONTRACT_ADDRESS = "0x8E1Fd433627b4b4AC1c8731CE0a4837419DE44Ab"; // XDC Apothem Testnet
+const APOTHEM_CHAIN_ID = 51;
+const APOTHEM_CHAIN_ID_HEX = '0x33';
+
+const getImageData = (url: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'Anonymous';
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx?.drawImage(img, 0, 0);
+            resolve(canvas.toDataURL('image/jpeg'));
+        };
+        img.onerror = (e) => reject(e);
+        img.src = url;
+    });
+};
 
 export default function AnalysisCenter() {
+    const { account, isConnected, provider } = useWallet();
     const [file, setFile] = useState<File | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
     const [isDragging, setIsDragging] = useState(false);
     const [status, setStatus] = useState<'idle' | 'uploading' | 'processing' | 'complete'>('idle');
-    const [result, setResult] = useState<{ diagnosis: string; confidence: number } | null>(null);
+    const [result, setResult] = useState<{ diagnosis: string; confidence: number; heatmap: string } | null>(null);
+    const [isMinting, setIsMinting] = useState(false);
+    const [mintingResult, setMintingResult] = useState<{ txHash: string; cid: string } | null>(null);
 
     const handleDrag = useCallback((e: React.DragEvent) => {
         e.preventDefault();
@@ -42,7 +72,7 @@ export default function AnalysisCenter() {
             reader.onload = (e) => {
                 setPreview(e.target?.result as string);
                 setFile(file);
-                setStatus('idle'); // Reset status if a new file is uploaded
+                setStatus('idle');
                 setResult(null);
             };
             reader.readAsDataURL(file);
@@ -51,18 +81,237 @@ export default function AnalysisCenter() {
         }
     };
 
-    const startAnalysis = () => {
+    const startAnalysis = async () => {
         if (!file) return;
-        setStatus('processing');
+        setStatus('uploading');
 
-        // Simulate API processing
-        setTimeout(() => {
-            setStatus('complete');
-            setResult({
-                diagnosis: Math.random() > 0.3 ? 'Normal' : 'Pneumonia',
-                confidence: 85 + Math.floor(Math.random() * 14) // 85-99%
+        const formData = new FormData();
+        formData.append('xray', file);
+
+        try {
+            setStatus('processing');
+            const response = await axios.post(`${BACKEND_URL}/api/analysis/upload`, formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data',
+                },
             });
-        }, 3000);
+
+            if (response.data.status === 'success') {
+                setStatus('complete');
+
+                let heatmapUrl = response.data.heatmap;
+                if (!heatmapUrl.startsWith('http')) {
+                    const filename = heatmapUrl.split(/[\\/]/).pop();
+                    heatmapUrl = `${BACKEND_URL}/uploads/${filename}`;
+                }
+
+                setResult({
+                    diagnosis: response.data.diagnosis,
+                    confidence: (response.data.confidence * 100).toFixed(2) as unknown as number, // Keeps as number/string compatible
+                    heatmap: heatmapUrl
+                });
+            } else {
+                alert('Analysis failed: ' + response.data.message);
+                setStatus('idle');
+            }
+        } catch (error) {
+            console.error(error);
+            alert('Error connecting to analysis server.');
+            setStatus('idle');
+        }
+    };
+
+    const downloadReport = async () => {
+        if (!result) return;
+
+        try {
+            const doc = new jsPDF();
+
+            // Header
+            doc.setFontSize(22);
+            doc.setTextColor(79, 70, 229); // Indigo 600
+            doc.text("XyraChain Medical AI Report", 20, 20);
+
+            doc.setFontSize(10);
+            doc.setTextColor(100);
+            doc.text(`Generated on: ${new Date().toLocaleString()}`, 20, 30);
+            doc.text(`Patient ID (Wallet): ${account || 'Anonymous'}`, 20, 35);
+            doc.text(`Analysis ID: ${Date.now()}`, 20, 40);
+
+            // Line
+            doc.setLineWidth(0.5);
+            doc.setDrawColor(200);
+            doc.line(20, 45, 190, 45);
+
+            // Section: Input Data
+            doc.setFontSize(14);
+            doc.setTextColor(0);
+            doc.text("Input Data", 20, 55);
+            doc.setFontSize(10);
+            doc.setTextColor(100);
+            doc.text(`File Name: ${file?.name}`, 20, 62);
+            const fileSize = file ? (file.size / 1024 / 1024).toFixed(2) : "0";
+            doc.text(`Size: ${fileSize} MB`, 20, 67);
+
+            // Images
+            try {
+                // Original (Preview is base64)
+                if (preview) {
+                    doc.setTextColor(0);
+                    doc.text("Original X-Ray Scan:", 20, 80);
+                    doc.addImage(preview, 'JPEG', 20, 85, 80, 100);
+                }
+
+                // Heatmap (Need to fetch and convert)
+                if (result.heatmap) {
+                    const heatmapData = await getImageData(result.heatmap);
+                    doc.text("AI Attention Heatmap (Grad-CAM):", 110, 80);
+                    doc.addImage(heatmapData, 'JPEG', 110, 85, 80, 100);
+                }
+            } catch (err) {
+                console.error("Error loading images for PDF", err);
+                doc.text("(Images could not be loaded into PDF due to browser security restrictions)", 20, 85);
+            }
+
+            // Results
+            const yStart = 200;
+            doc.setFontSize(14);
+            doc.setTextColor(0);
+            doc.text("Analysis Results", 20, yStart);
+
+            doc.setFontSize(12);
+            doc.setTextColor(50);
+
+            const pneumoniaProb = result.diagnosis === 'PNEUMONIA'
+                ? result.confidence
+                : (100 - (result.confidence as any)).toFixed(2);
+
+            doc.text(`Model Assessment: ${result.diagnosis}`, 20, yStart + 10);
+            doc.text(`Pneumonia Probability: ${pneumoniaProb}%`, 20, yStart + 18);
+            doc.text(`Model Architecture: CheXNet-v2 (CNN)`, 20, yStart + 26);
+            doc.text(`Training Dataset: Kermany Chest X-Ray Data`, 20, yStart + 34);
+
+            // Footer
+            doc.setFontSize(8);
+            doc.setTextColor(150);
+            doc.text("Disclaimer: This report is generated by an AI model and should not replace professional medical advice.", 20, 280);
+            doc.text("XyraChain Decentralized Health Network © 2024", 20, 285);
+
+            doc.save(`XyraChain_Report_${Date.now()}.pdf`);
+        } catch (e) {
+            console.error(e);
+            alert("Failed to generate PDF");
+        }
+    };
+
+    const consultDoctor = () => {
+        alert("Redirecting to Telemedicine Partner...\n(Feature coming soon!)");
+    };
+
+    const mintResults = async () => {
+        if (!result || !isConnected) {
+            alert('Please process an image and connect your wallet first.');
+            return;
+        }
+
+        setIsMinting(true);
+        try {
+            // 0. Ensure Correct Network
+            // We use window.ethereum directly to avoid "network changed" errors on the existing provider
+            const chainIdHex = await window.ethereum.request({ method: 'eth_chainId' });
+            const chainId = parseInt(chainIdHex, 16);
+
+            if (chainId !== APOTHEM_CHAIN_ID) {
+                try {
+                    await window.ethereum.request({
+                        method: 'wallet_switchEthereumChain',
+                        params: [{ chainId: APOTHEM_CHAIN_ID_HEX }],
+                    });
+                    // Wait for switch to propagate
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                } catch (switchError: any) {
+                    // This error code indicates that the chain has not been added to MetaMask.
+                    if (switchError.code === 4902 || switchError.code === -32603) {
+                        try {
+                            await window.ethereum.request({
+                                method: 'wallet_addEthereumChain',
+                                params: [{
+                                    chainId: APOTHEM_CHAIN_ID_HEX,
+                                    chainName: 'XDC Apothem Testnet',
+                                    nativeCurrency: {
+                                        name: 'XDC',
+                                        symbol: 'XDC',
+                                        decimals: 18
+                                    },
+                                    rpcUrls: ['https://rpc.apothem.network'],
+                                    blockExplorerUrls: ['https://apothem.xdcscan.io']
+                                }],
+                            });
+                        } catch (addError) {
+                            console.error("Failed to add network:", addError);
+                            alert("Please manually add XDC Apothem Testnet (RPC: https://rpc.apothem.network)");
+                            setIsMinting(false);
+                            return;
+                        }
+                    } else {
+                        alert("Please switch your wallet to XDC Apothem Testnet (Chain ID 51) and try again.");
+                        setIsMinting(false);
+                        return;
+                    }
+                }
+            }
+
+            // Re-initialize provider to ensure it's on the correct network without error
+            const freshProvider = new ethers.BrowserProvider(window.ethereum);
+            const signer = await freshProvider.getSigner();
+
+            // 1. Generate Report and Pin to IPFS
+            const reportData = {
+                analysisResult: result,
+                chatLogs: [],
+                userAddress: account
+            };
+
+            const response = await axios.post(`${BACKEND_URL}/api/analysis/generate-report`, reportData);
+            let cid = "";
+
+            if (response.data.status === 'success') {
+                cid = response.data.cid;
+                console.log('Report pinned to IPFS:', cid);
+            } else {
+                throw new Error(response.data.message);
+            }
+
+            // 2. Mint to Blockchain
+            try {
+                const contract = new ethers.Contract(CONTRACT_ADDRESS, XyraChainArtifact.abi, signer);
+
+                // Ensure confidence is an integer 0-100
+                const confidenceInt = Math.floor(result.confidence as any);
+
+                const tx = await contract.addReport(
+                    cid,
+                    result.diagnosis,
+                    confidenceInt
+                );
+
+                console.log("Transaction sent:", tx.hash);
+
+                await tx.wait();
+                setMintingResult({ txHash: tx.hash, cid: cid });
+                // alert(`Minted Successfully!\n\nTx Hash: ${tx.hash}\nIPFS CID: ${cid}\n\nView on Explorer: https://explorer.apothem.network/tx/${tx.hash}`);
+
+            } catch (chainError: any) {
+                console.error("Blockchain Error:", chainError);
+                alert(`IPFS Upload Success, but Blockchain Minting Failed:\n${chainError.reason || chainError.message || chainError}`);
+            }
+
+        } catch (error: any) {
+            console.error(error);
+            alert('Failed to mint results: ' + (error.reason || error.message));
+        } finally {
+            setIsMinting(false);
+        }
     };
 
     return (
@@ -88,23 +337,25 @@ export default function AnalysisCenter() {
                             {/* Dropzone */}
                             <div
                                 className={`relative group rounded-3xl border-2 border-dashed transition-all duration-300 ${isDragging
-                                        ? 'border-sky-500 bg-sky-500/10'
-                                        : file
-                                            ? 'border-white/10 bg-white/5'
-                                            : 'border-white/10 hover:border-white/20 hover:bg-white/5'
+                                    ? 'border-sky-500 bg-sky-500/10'
+                                    : file
+                                        ? 'border-white/10 bg-white/5'
+                                        : 'border-white/10 hover:border-white/20 hover:bg-white/5'
                                     }`}
                                 onDragEnter={handleDrag}
                                 onDragLeave={handleDrag}
                                 onDragOver={handleDrag}
                                 onDrop={handleDrop}
                             >
-                                <input
-                                    type="file"
-                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
-                                    onChange={handleChange}
-                                    accept="image/*"
-                                    disabled={status === 'processing'}
-                                />
+                                {!file && (
+                                    <input
+                                        type="file"
+                                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
+                                        onChange={handleChange}
+                                        accept="image/*"
+                                        disabled={status === 'processing' || status === 'uploading'}
+                                    />
+                                )}
 
                                 <div className="p-12 text-center relative z-10 transition-all">
                                     {file ? (
@@ -113,15 +364,26 @@ export default function AnalysisCenter() {
                                             <div className="w-full h-64 mx-auto rounded-lg overflow-hidden relative mb-6 bg-black/50">
                                                 <img src={preview!} alt="Preview" className="h-full w-full object-contain opacity-80" />
 
+                                                {/* Clear Button */}
+                                                {status === 'idle' && (
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); setFile(null); setPreview(null); }}
+                                                        className="absolute top-2 right-2 p-2 bg-black/50 hover:bg-black/70 rounded-full text-white/80 hover:text-white transition-colors z-30"
+                                                        title="Remove Image"
+                                                    >
+                                                        <iconify-icon icon="solar:close-circle-bold" width="24"></iconify-icon>
+                                                    </button>
+                                                )}
+
                                                 {/* Scanning Animation Overlay */}
-                                                {status === 'processing' && (
+                                                {(status === 'processing' || status === 'uploading') && (
                                                     <div className="absolute inset-0 z-20 overflow-hidden">
                                                         <div className="absolute top-0 left-0 w-full h-1 bg-sky-500/50 shadow-[0_0_15px_rgba(14,165,233,0.8)] animate-[scan_2s_linear_infinite]"></div>
                                                     </div>
                                                 )}
                                             </div>
 
-                                            {status === 'processing' ? (
+                                            {(status === 'processing' || status === 'uploading') ? (
                                                 <div className="flex flex-col items-center gap-3">
                                                     <div className="w-full max-w-xs bg-white/5 rounded-full h-1.5 overflow-hidden">
                                                         <div className="h-full bg-sky-500 animate-[loading_1.5s_ease-in-out_infinite]"></div>
@@ -179,9 +441,13 @@ export default function AnalysisCenter() {
                                     <span className="text-xs font-medium text-slate-500 bg-white/5 px-3 py-1.5 rounded-full border border-white/5">
                                         Model: CheXNet-v2
                                     </span>
-                                    <button className="flex items-center gap-2 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 rounded-full transition-colors shadow-lg shadow-indigo-500/20">
+                                    <button
+                                        onClick={mintResults}
+                                        disabled={isMinting || !isConnected}
+                                        className={`flex items-center gap-2 text-xs font-medium text-white px-4 py-1.5 rounded-full transition-colors shadow-lg ${isMinting || !isConnected ? 'bg-slate-600 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-500/20'}`}
+                                    >
                                         <iconify-icon icon="solar:file-download-linear" width="14"></iconify-icon>
-                                        Mint Results
+                                        {isMinting ? 'Securing...' : 'Mint Results'}
                                     </button>
                                 </div>
                             </div>
@@ -209,15 +475,10 @@ export default function AnalysisCenter() {
                                             Grad-CAM Attention
                                         </h3>
                                         <div className="rounded-xl overflow-hidden bg-black aspect-[4/5] relative">
-                                            {/* Using CSS filters to simulate a heatmap overlay for now */}
-                                            <img src={preview!} alt="Heatmap" className="w-full h-full object-contain opacity-50 absolute inset-0 mix-blend-luminosity" />
-                                            <div className="absolute inset-0 mix-blend-overlay bg-gradient-to-tr from-blue-900/40 via-transparent to-red-900/40 pointer-events-none"></div>
+                                            {/* Actual Heatmap from Backend */}
+                                            <img src={result?.heatmap} alt="Heatmap" className="w-full h-full object-contain" />
 
-                                            {/* Simulated Activation Map Overlay */}
-                                            {result?.diagnosis === 'Pneumonia' && (
-                                                <div className="absolute top-1/4 right-1/4 w-32 h-32 bg-red-500/40 blur-3xl rounded-full mix-blend-color-dodge"></div>
-                                            )}
-                                            <div className="absolute inset-0 flex items-center justify-center">
+                                            <div className="absolute inset-0 flex items-end justify-center pb-4 pointer-events-none">
                                                 <span className="bg-black/60 backdrop-blur-sm text-xs text-white px-3 py-1 rounded-full border border-white/10">
                                                     AI Interest Region
                                                 </span>
@@ -230,31 +491,35 @@ export default function AnalysisCenter() {
                                 <div className="lg:col-span-1 space-y-6">
 
                                     {/* Diagnosis Card */}
-                                    <div className={`p-6 rounded-2xl border ${result?.diagnosis === 'Normal' ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-rose-500/20 bg-rose-500/5'}`}>
+                                    <div className={`p-6 rounded-2xl border ${result?.diagnosis === 'NORMAL' ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-rose-500/20 bg-rose-500/5'}`}>
                                         <div className="flex items-start justify-between mb-4">
                                             <div>
-                                                <p className={`text-xs font-medium uppercase tracking-wider mb-1 ${result?.diagnosis === 'Normal' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                                    Diagnosis
+                                                <p className={`text-xs font-medium uppercase tracking-wider mb-1 ${result?.diagnosis === 'NORMAL' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                    Model Assessment
                                                 </p>
                                                 <h2 className="text-3xl font-semibold text-white">
                                                     {result?.diagnosis}
                                                 </h2>
                                             </div>
-                                            <div className={`p-3 rounded-xl ${result?.diagnosis === 'Normal' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
-                                                <iconify-icon icon={result?.diagnosis === 'Normal' ? "solar:shield-check-bold" : "solar:danger-triangle-bold"} width="24"></iconify-icon>
+                                            <div className={`p-3 rounded-xl ${result?.diagnosis === 'NORMAL' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+                                                <iconify-icon icon={result?.diagnosis === 'NORMAL' ? "solar:shield-check-bold" : "solar:danger-triangle-bold"} width="24"></iconify-icon>
                                             </div>
                                         </div>
 
                                         <div className="space-y-3">
                                             <div>
                                                 <div className="flex justify-between text-xs mb-1">
-                                                    <span className="text-slate-400">Confidence Score</span>
-                                                    <span className="text-white font-medium">{result?.confidence}%</span>
+                                                    <span className="text-slate-400">Pneumonia Probability</span>
+                                                    <span className="text-white font-medium">
+                                                        {result?.diagnosis === 'PNEUMONIA'
+                                                            ? result?.confidence
+                                                            : (100 - (result?.confidence || 0)).toFixed(2)}%
+                                                    </span>
                                                 </div>
                                                 <div className="h-2 w-full bg-black/20 rounded-full overflow-hidden">
                                                     <div
-                                                        className={`h-full rounded-full ${result?.diagnosis === 'Normal' ? 'bg-emerald-500' : 'bg-rose-500'}`}
-                                                        style={{ width: `${result?.confidence}%` }}
+                                                        className={`h-full rounded-full ${result?.diagnosis === 'NORMAL' ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                                                        style={{ width: `${result?.diagnosis === 'PNEUMONIA' ? result?.confidence : (100 - (result?.confidence || 0)).toFixed(2)}%` }}
                                                     ></div>
                                                 </div>
                                             </div>
@@ -270,7 +535,7 @@ export default function AnalysisCenter() {
                                                 </div>
                                                 <div>
                                                     <p className="text-xs text-slate-400">Inference Time</p>
-                                                    <p className="text-sm font-medium text-white">124 ms</p>
+                                                    <p className="text-sm font-medium text-white">~1.2s</p>
                                                 </div>
                                             </div>
                                         </div>
@@ -281,7 +546,7 @@ export default function AnalysisCenter() {
                                                 </div>
                                                 <div>
                                                     <p className="text-xs text-slate-400">Scan Resolution</p>
-                                                    <p className="text-sm font-medium text-white">1024x1024 px</p>
+                                                    <p className="text-sm font-medium text-white">Original</p>
                                                 </div>
                                             </div>
                                         </div>
@@ -289,23 +554,70 @@ export default function AnalysisCenter() {
 
                                     {/* Action Buttons */}
                                     <div className="flex gap-3">
-                                        <button className="flex-1 py-3 px-4 rounded-xl border border-white/10 hover:bg-white/5 text-white text-sm font-medium transition-colors">
+                                        <button
+                                            onClick={downloadReport}
+                                            className="flex-1 py-3 px-4 rounded-xl border border-white/10 hover:bg-white/5 text-white text-sm font-medium transition-colors"
+                                        >
                                             Download Report
                                         </button>
-                                        <button className="flex-1 py-3 px-4 rounded-xl bg-white text-black text-sm font-medium hover:bg-slate-200 transition-colors">
+                                        <button
+                                            onClick={consultDoctor}
+                                            className="flex-1 py-3 px-4 rounded-xl bg-white text-black text-sm font-medium hover:bg-slate-200 transition-colors"
+                                        >
                                             Consult Doctor
                                         </button>
                                     </div>
-
                                 </div>
-
                             </div>
                         </div>
                     )}
                 </div>
+                {mintingResult && (
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                        <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setMintingResult(null)}></div>
+                        <div className="bg-[#0f0f0f] border border-white/10 rounded-3xl w-full max-w-md p-8 relative z-10 animate-fade-in-up text-center shadow-2xl shadow-emerald-500/10">
 
+                            <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-6">
+                                <iconify-icon icon="solar:verified-check-bold" width="32"></iconify-icon>
+                            </div>
+
+                            <h3 className="text-2xl font-semibold text-white mb-2">Minting Successful!</h3>
+                            <p className="text-slate-400 text-sm mb-8">
+                                Your medical report has been permanently secured on the XDC Blockchain.
+                            </p>
+
+                            <div className="space-y-4 mb-8 text-left">
+                                <div className="p-4 rounded-xl bg-white/5 border border-white/5">
+                                    <p className="text-xs text-slate-500 uppercase tracking-wider mb-1">Transaction Hash</p>
+                                    <a
+                                        href={`https://apothem.xdcscan.io/tx/${mintingResult.txHash}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-indigo-400 text-sm flex items-center gap-2 hover:underline truncate"
+                                    >
+                                        <span className="truncate">{mintingResult.txHash}</span>
+                                        <iconify-icon icon="solar:arrow-right-up-linear" width="12" className="flex-shrink-0"></iconify-icon>
+                                    </a>
+                                </div>
+
+                                <div className="p-4 rounded-xl bg-white/5 border border-white/5">
+                                    <p className="text-xs text-slate-500 uppercase tracking-wider mb-1">IPFS CID</p>
+                                    <div className="text-white text-sm font-mono truncate select-all">
+                                        {mintingResult.cid}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <button
+                                onClick={() => setMintingResult(null)}
+                                className="w-full py-3 rounded-xl bg-white text-black font-semibold hover:bg-slate-200 transition-colors"
+                            >
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                )}
             </main>
-
             <Footer />
         </div>
     );
