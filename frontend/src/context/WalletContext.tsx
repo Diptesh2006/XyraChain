@@ -11,6 +11,7 @@ interface WalletContextType {
     account: string | null;
     provider: ethers.BrowserProvider | null;
     connectWallet: () => Promise<void>;
+    disconnectWallet: () => void;
     isConnected: boolean;
 }
 
@@ -20,33 +21,50 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const [account, setAccount] = useState<string | null>(null);
     const [provider, setProvider] = useState<ethers.BrowserProvider | null>(null);
 
-    const checkConnection = async () => {
-        if (window.ethereum) {
-            try {
-                const browserProvider = new ethers.BrowserProvider(window.ethereum);
-                const accounts = await browserProvider.listAccounts();
-                if (accounts.length > 0) {
-                    setAccount(accounts[0].address);
-                    setProvider(browserProvider);
-                }
-            } catch (err) {
-                console.error("Error checking wallet connection:", err);
-            }
-        }
-    };
-
     useEffect(() => {
-        checkConnection();
-        if (window.ethereum) {
-            window.ethereum.on('accountsChanged', (accounts: string[]) => {
+        if (!window.ethereum) {
+            return;
+        }
+
+        const browserProvider = new ethers.BrowserProvider(window.ethereum);
+
+        const syncWalletState = async () => {
+            try {
+                const accounts = await browserProvider.send('eth_accounts', []);
                 if (accounts.length > 0) {
                     setAccount(accounts[0]);
+                    setProvider(browserProvider);
                 } else {
                     setAccount(null);
                     setProvider(null);
                 }
-            });
-        }
+            } catch (error) {
+                console.error('Error syncing wallet state:', error);
+            }
+        };
+
+        const handleAccountsChanged = (accounts: string[]) => {
+            if (accounts.length > 0) {
+                setAccount(accounts[0]);
+                setProvider(browserProvider);
+            } else {
+                setAccount(null);
+                setProvider(null);
+            }
+        };
+
+        const handleChainChanged = () => {
+            void syncWalletState();
+        };
+
+        void syncWalletState();
+        window.ethereum.on('accountsChanged', handleAccountsChanged);
+        window.ethereum.on('chainChanged', handleChainChanged);
+
+        return () => {
+            window.ethereum.removeListener?.('accountsChanged', handleAccountsChanged);
+            window.ethereum.removeListener?.('chainChanged', handleChainChanged);
+        };
     }, []);
 
     const connectWallet = async () => {
@@ -55,6 +73,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             return;
         }
         try {
+            await window.ethereum.request({
+                method: "wallet_requestPermissions",
+                params: [{
+                    eth_accounts: {}
+                }]
+            });
+
             const browserProvider = new ethers.BrowserProvider(window.ethereum);
             const accounts = await browserProvider.send("eth_requestAccounts", []);
             setAccount(accounts[0]);
@@ -64,8 +89,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         }
     };
 
+    const disconnectWallet = () => {
+        setAccount(null);
+        setProvider(null);
+    };
+
     return (
-        <WalletContext.Provider value={{ account, provider, connectWallet, isConnected: !!account }}>
+        <WalletContext.Provider value={{ account, provider, connectWallet, disconnectWallet, isConnected: !!account }}>
             {children}
         </WalletContext.Provider>
     );

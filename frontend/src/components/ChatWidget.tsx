@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { getApiUrl } from '../config';
 
 type Message = {
     id: string;
@@ -42,8 +43,7 @@ export default function ChatWidget() {
         setIsLoading(true);
 
         try {
-            // Updated to point to port 5000 and correct endpoint
-            const response = await fetch('http://localhost:5000/api/chat/message', {
+            const response = await fetch(getApiUrl('/api/chat/message'), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -51,11 +51,11 @@ export default function ChatWidget() {
                 body: JSON.stringify({ message: userMessage.text }),
             });
 
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
-            }
-
             const data = await response.json();
+
+            if (!response.ok && !data.response) {
+                throw new Error(data.error || 'Network response was not ok');
+            }
 
             const botMessage: Message = {
                 id: Date.now().toString(), // unique id

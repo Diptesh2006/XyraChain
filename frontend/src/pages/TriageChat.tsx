@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import Navbar from '../components/Navbar';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { getApiUrl } from '../config';
 
 interface Message {
     id: number;
@@ -35,20 +36,22 @@ export default function TriageChat() {
         setIsTyping(true);
 
         try {
-            const response = await fetch('http://localhost:8000/chat', {
+            const response = await fetch(getApiUrl('/api/chat/message'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: userText })
             });
 
-            if (!response.ok) throw new Error('Failed to get response');
-
             const data = await response.json();
+
+            if (!response.ok && !data.response) {
+                throw new Error(data.error || 'Failed to get response');
+            }
 
             const aiMsg: Message = {
                 id: Date.now() + 1,
                 sender: 'ai',
-                text: data.answer || "I'm having trouble processing that request."
+                text: data.response || "I'm having trouble processing that request."
             };
 
             setMessages(prev => [...prev, aiMsg]);

@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 
@@ -61,13 +62,13 @@ export default function Landing() {
             </p>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-              <a
-                href="/analysis"
+              <Link
+                to="/analysis"
                 className="w-full sm:w-auto px-8 py-3.5 rounded-lg bg-emerald-600 text-white font-medium text-sm hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20"
               >
                 Start Analysis
                 <iconify-icon icon="solar:arrow-right-linear" width="18"></iconify-icon>
-              </a>
+              </Link>
               <a
                 href="#features"
                 className="w-full sm:w-auto px-8 py-3.5 rounded-lg border border-stone-200 text-stone-600 font-medium text-sm hover:bg-stone-50 dark:border-white/10 dark:text-stone-400 dark:hover:bg-white/5 transition-colors"

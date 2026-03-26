@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 import { useWallet } from '../context/WalletContext';
@@ -6,11 +7,13 @@ import axios from 'axios';
 import { jsPDF } from 'jspdf';
 import { ethers } from 'ethers';
 import XyraChainArtifact from '../contracts/XyraChain.json';
+import { APP_CONFIG, getApiUrl, getExplorerUrl } from '../config';
 
-const BACKEND_URL = 'http://localhost:5000';
-const CONTRACT_ADDRESS = "0x8E1Fd433627b4b4AC1c8731CE0a4837419DE44Ab"; // XDC Apothem Testnet
-const APOTHEM_CHAIN_ID = 51;
-const APOTHEM_CHAIN_ID_HEX = '0x33';
+interface AnalysisResult {
+    diagnosis: string;
+    confidence: number;
+    heatmap: string;
+}
 
 const getImageData = (url: string): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -30,14 +33,22 @@ const getImageData = (url: string): Promise<string> => {
 };
 
 export default function AnalysisCenter() {
+    const navigate = useNavigate();
     const { account, isConnected } = useWallet();
     const [file, setFile] = useState<File | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
     const [isDragging, setIsDragging] = useState(false);
     const [status, setStatus] = useState<'idle' | 'uploading' | 'processing' | 'complete'>('idle');
-    const [result, setResult] = useState<{ diagnosis: string; confidence: number; heatmap: string } | null>(null);
+    const [result, setResult] = useState<AnalysisResult | null>(null);
     const [isMinting, setIsMinting] = useState(false);
     const [mintingResult, setMintingResult] = useState<{ txHash: string; cid: string } | null>(null);
+    const contractAddress = APP_CONFIG.contractAddress;
+
+    const getPneumoniaProbability = (analysisResult: AnalysisResult) => (
+        analysisResult.diagnosis === 'PNEUMONIA'
+            ? analysisResult.confidence
+            : Number((100 - analysisResult.confidence).toFixed(2))
+    );
 
     const handleDrag = useCallback((e: React.DragEvent) => {
         e.preventDefault();
@@ -67,7 +78,7 @@ export default function AnalysisCenter() {
     };
 
     const handleFile = (file: File) => {
-        if (file.type.match('image.*')) {
+        if (['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
             const reader = new FileReader();
             reader.onload = (e) => {
                 setPreview(e.target?.result as string);
@@ -77,7 +88,7 @@ export default function AnalysisCenter() {
             };
             reader.readAsDataURL(file);
         } else {
-            alert('Please upload a valid image file (PNG, JPG, etc.)');
+            alert('Please upload a PNG, JPEG, or WebP image. DICOM files are not supported yet.');
         }
     };
 
@@ -90,7 +101,7 @@ export default function AnalysisCenter() {
 
         try {
             setStatus('processing');
-            const response = await axios.post(`${BACKEND_URL}/api/analysis/upload`, formData, {
+            const response = await axios.post(getApiUrl('/api/analysis/upload'), formData, {
                 headers: {
                     'Content-Type': 'multipart/form-data',
                 },
@@ -102,12 +113,12 @@ export default function AnalysisCenter() {
                 let heatmapUrl = response.data.heatmap;
                 if (!heatmapUrl.startsWith('http')) {
                     const filename = heatmapUrl.split(/[\\/]/).pop();
-                    heatmapUrl = `${BACKEND_URL}/uploads/${filename}`;
+                    heatmapUrl = getApiUrl(`/uploads/${filename}`);
                 }
 
                 setResult({
                     diagnosis: response.data.diagnosis,
-                    confidence: (response.data.confidence * 100).toFixed(2) as unknown as number, // Keeps as number/string compatible
+                    confidence: Number((response.data.confidence * 100).toFixed(2)),
                     heatmap: heatmapUrl
                 });
             } else {
@@ -182,9 +193,7 @@ export default function AnalysisCenter() {
             doc.setFontSize(12);
             doc.setTextColor(50);
 
-            const pneumoniaProb = result.diagnosis === 'PNEUMONIA'
-                ? result.confidence
-                : (100 - (result.confidence as any)).toFixed(2);
+            const pneumoniaProb = getPneumoniaProbability(result);
 
             doc.text(`Model Assessment: ${result.diagnosis}`, 20, yStart + 10);
             doc.text(`Pneumonia Probability: ${pneumoniaProb}%`, 20, yStart + 18);
@@ -205,7 +214,7 @@ export default function AnalysisCenter() {
     };
 
     const consultDoctor = () => {
-        alert("Redirecting to Telemedicine Partner...\n(Feature coming soon!)");
+        navigate('/find-doctor');
     };
 
     const mintResults = async () => {
@@ -214,65 +223,65 @@ export default function AnalysisCenter() {
             return;
         }
 
+        if (!window.ethereum) {
+            alert('No compatible wallet was detected.');
+            return;
+        }
+
+        if (!contractAddress) {
+            alert('Contract address is not configured. Set VITE_CONTRACT_ADDRESS before minting.');
+            return;
+        }
+
         setIsMinting(true);
         try {
-            // 0. Ensure Correct Network
-            // We use window.ethereum directly to avoid "network changed" errors on the existing provider
             const chainIdHex = await window.ethereum.request({ method: 'eth_chainId' });
             const chainId = parseInt(chainIdHex, 16);
 
-            if (chainId !== APOTHEM_CHAIN_ID) {
+            if (chainId !== APP_CONFIG.network.chainId) {
                 try {
                     await window.ethereum.request({
                         method: 'wallet_switchEthereumChain',
-                        params: [{ chainId: APOTHEM_CHAIN_ID_HEX }],
+                        params: [{ chainId: APP_CONFIG.network.chainIdHex }],
                     });
-                    // Wait for switch to propagate
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 } catch (switchError: any) {
-                    // This error code indicates that the chain has not been added to MetaMask.
                     if (switchError.code === 4902 || switchError.code === -32603) {
                         try {
                             await window.ethereum.request({
                                 method: 'wallet_addEthereumChain',
                                 params: [{
-                                    chainId: APOTHEM_CHAIN_ID_HEX,
-                                    chainName: 'XDC Apothem Testnet',
-                                    nativeCurrency: {
-                                        name: 'XDC',
-                                        symbol: 'XDC',
-                                        decimals: 18
-                                    },
-                                    rpcUrls: ['https://rpc.apothem.network'],
-                                    blockExplorerUrls: ['https://apothem.xdcscan.io']
+                                    chainId: APP_CONFIG.network.chainIdHex,
+                                    chainName: APP_CONFIG.network.chainName,
+                                    nativeCurrency: APP_CONFIG.network.nativeCurrency,
+                                    rpcUrls: [APP_CONFIG.network.rpcUrl],
+                                    blockExplorerUrls: [APP_CONFIG.network.blockExplorerUrl]
                                 }],
                             });
                         } catch (addError) {
                             console.error("Failed to add network:", addError);
-                            alert("Please manually add XDC Apothem Testnet (RPC: https://rpc.apothem.network)");
+                            alert(`Please manually add ${APP_CONFIG.network.chainName} (${APP_CONFIG.network.rpcUrl})`);
                             setIsMinting(false);
                             return;
                         }
                     } else {
-                        alert("Please switch your wallet to XDC Apothem Testnet (Chain ID 51) and try again.");
+                        alert(`Please switch your wallet to ${APP_CONFIG.network.chainName} (Chain ID ${APP_CONFIG.network.chainId}) and try again.`);
                         setIsMinting(false);
                         return;
                     }
                 }
             }
 
-            // Re-initialize provider to ensure it's on the correct network without error
             const freshProvider = new ethers.BrowserProvider(window.ethereum);
             const signer = await freshProvider.getSigner();
 
-            // 1. Generate Report and Pin to IPFS
             const reportData = {
                 analysisResult: result,
                 chatLogs: [],
                 userAddress: account
             };
 
-            const response = await axios.post(`${BACKEND_URL}/api/analysis/generate-report`, reportData);
+            const response = await axios.post(getApiUrl('/api/analysis/generate-report'), reportData);
             let cid = "";
 
             if (response.data.status === 'success') {
@@ -282,12 +291,9 @@ export default function AnalysisCenter() {
                 throw new Error(response.data.message);
             }
 
-            // 2. Mint to Blockchain
             try {
-                const contract = new ethers.Contract(CONTRACT_ADDRESS, XyraChainArtifact.abi, signer);
-
-                // Ensure confidence is an integer 0-100
-                const confidenceInt = Math.floor(result.confidence as any);
+                const contract = new ethers.Contract(contractAddress, XyraChainArtifact.abi, signer);
+                const confidenceInt = Math.floor(result.confidence);
 
                 const tx = await contract.addReport(
                     cid,
@@ -299,7 +305,6 @@ export default function AnalysisCenter() {
 
                 await tx.wait();
                 setMintingResult({ txHash: tx.hash, cid: cid });
-                // alert(`Minted Successfully!\n\nTx Hash: ${tx.hash}\nIPFS CID: ${cid}\n\nView on Explorer: https://explorer.apothem.network/tx/${tx.hash}`);
 
             } catch (chainError: any) {
                 console.error("Blockchain Error:", chainError);
@@ -415,7 +420,7 @@ export default function AnalysisCenter() {
                                             <div className="mt-6 flex items-center justify-center gap-3 text-xs text-stone-600 dark:text-stone-400">
                                                 <span className="px-2 py-1 rounded bg-stone-100 border border-stone-200 dark:bg-white/5 dark:border-white/10">PNG</span>
                                                 <span className="px-2 py-1 rounded bg-stone-100 border border-stone-200">JPG</span>
-                                                <span className="px-2 py-1 rounded bg-stone-100 border border-stone-200">DICOM</span>
+                                                <span className="px-2 py-1 rounded bg-stone-100 border border-stone-200">WebP</span>
                                             </div>
                                         </div>
                                     )}
@@ -441,8 +446,8 @@ export default function AnalysisCenter() {
                                     </span>
                                     <button
                                         onClick={mintResults}
-                                        disabled={isMinting || !isConnected}
-                                        className={`flex items-center gap-2 text-xs font-medium text-white px-4 py-1.5 rounded-full transition-colors shadow-lg ${isMinting || !isConnected ? 'bg-stone-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/20'}`}
+                                        disabled={isMinting || !isConnected || !contractAddress}
+                                        className={`flex items-center gap-2 text-xs font-medium text-white px-4 py-1.5 rounded-full transition-colors shadow-lg ${isMinting || !isConnected || !contractAddress ? 'bg-stone-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/20'}`}
                                     >
                                         <iconify-icon icon="solar:file-download-linear" width="14"></iconify-icon>
                                         {isMinting ? 'Securing...' : 'Mint Results'}
@@ -509,15 +514,13 @@ export default function AnalysisCenter() {
                                                 <div className="flex justify-between text-xs mb-1">
                                                     <span className="text-stone-500 dark:text-stone-400">Pneumonia Probability</span>
                                                     <span className="text-stone-800 dark:text-white font-medium">
-                                                        {result?.diagnosis === 'PNEUMONIA'
-                                                            ? result?.confidence
-                                                            : (100 - (result?.confidence || 0)).toFixed(2)}%
+                                                        {result ? getPneumoniaProbability(result) : 0}%
                                                     </span>
                                                 </div>
                                                 <div className="h-2 w-full bg-stone-200 rounded-full overflow-hidden">
                                                     <div
                                                         className={`h-full rounded-full ${result?.diagnosis === 'NORMAL' ? 'bg-emerald-500' : 'bg-rose-500'}`}
-                                                        style={{ width: `${result?.diagnosis === 'PNEUMONIA' ? result?.confidence : (100 - (result?.confidence || 0)).toFixed(2)}%` }}
+                                                        style={{ width: `${result ? getPneumoniaProbability(result) : 0}%` }}
                                                     ></div>
                                                 </div>
                                             </div>
@@ -588,7 +591,7 @@ export default function AnalysisCenter() {
                                 <div className="p-4 rounded-xl bg-stone-50 border border-stone-100 dark:bg-white/5 dark:border-white/5">
                                     <p className="text-xs text-stone-400 uppercase tracking-wider mb-1">Transaction Hash</p>
                                     <a
-                                        href={`https://apothem.xdcscan.io/tx/${mintingResult.txHash}`}
+                                        href={getExplorerUrl('tx', mintingResult.txHash)}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="text-emerald-600 dark:text-emerald-400 text-sm flex items-center gap-2 hover:underline truncate"

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 
 export default function Navbar() {
   const location = useLocation();
-  const { connectWallet, account, isConnected } = useWallet();
+  const { connectWallet, disconnectWallet, account, isConnected } = useWallet();
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
 
   useEffect(() => {
@@ -58,6 +58,9 @@ export default function Navbar() {
           <Link to="/profile" className={`px-4 py-2 rounded-full text-sm transition-all ${isActive('/profile')}`}>
             Profile
           </Link>
+          <Link to="/find-doctor" className={`px-4 py-2 rounded-full text-sm transition-all ${isActive('/find-doctor')}`}>
+            Find Doctor
+          </Link>
         </div>
 
         {/* Wallet Connect & Theme Toggle */}
@@ -74,15 +77,25 @@ export default function Navbar() {
             )}
           </button>
 
-          <button
-            onClick={connectWallet}
-            className={`group flex items-center gap-2 px-4 py-2 rounded-full border ${isConnected
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-500/10 dark:border-emerald-500/20 dark:text-emerald-400'
-              : 'bg-white border-stone-200 text-stone-600 hover:bg-stone-50 dark:bg-white/5 dark:border-white/10 dark:text-stone-300 dark:hover:bg-white/10'} text-xs font-medium transition-all shadow-sm`}
-          >
-            <iconify-icon icon="solar:wallet-linear" width="16" className={isConnected ? "text-emerald-500" : "text-stone-400 group-hover:text-stone-600 dark:text-stone-500 dark:group-hover:text-stone-300"}></iconify-icon>
-            <span>{isConnected && account ? formatAddress(account) : "Connect Wallet"}</span>
-          </button>
+          {isConnected ? (
+            <button
+              onClick={disconnectWallet}
+              className="group flex items-center gap-2 px-4 py-2 rounded-full border bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-500/10 dark:border-emerald-500/20 dark:text-emerald-400 text-xs font-medium transition-all shadow-sm hover:bg-rose-50 hover:border-rose-200 hover:text-rose-600 dark:hover:bg-rose-500/10 dark:hover:border-rose-500/20 dark:hover:text-rose-400"
+              title="Click to Disconnect"
+            >
+              <iconify-icon icon="solar:wallet-bold" width="16"></iconify-icon>
+              <span>{account ? formatAddress(account) : 'Connected'}</span>
+              <iconify-icon icon="solar:logout-2-linear" width="16" className="hidden group-hover:block"></iconify-icon>
+            </button>
+          ) : (
+            <button
+              onClick={connectWallet}
+              className="group flex items-center gap-2 px-4 py-2 rounded-full border bg-white border-stone-200 text-stone-600 hover:bg-stone-50 dark:bg-white/5 dark:border-white/10 dark:text-stone-300 dark:hover:bg-white/10 text-xs font-medium transition-all shadow-sm"
+            >
+              <iconify-icon icon="solar:wallet-linear" width="16" className="text-stone-400 group-hover:text-stone-600 dark:text-stone-500 dark:group-hover:text-stone-300"></iconify-icon>
+              <span>Connect Wallet</span>
+            </button>
+          )}
         </div>
       </div>
     </nav>

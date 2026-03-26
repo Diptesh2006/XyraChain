@@ -4,6 +4,7 @@ import AnalysisCenter from './pages/AnalysisCenter';
 import TriageChat from './pages/TriageChat';
 import PatientVault from './pages/PatientVault';
 import Profile from './pages/Profile';
+import HospitalFinder from './pages/HospitalFinder';
 import ChatWidget from './components/ChatWidget';
 
 function App() {
@@ -18,6 +19,7 @@ function App() {
         <Route path="/triage" element={<TriageChat />} />
         <Route path="/vault" element={<PatientVault />} />
         <Route path="/profile" element={<Profile />} />
+        <Route path="/find-doctor" element={<HospitalFinder />} />
       </Routes>
 
       {showChatWidget && <ChatWidget />}

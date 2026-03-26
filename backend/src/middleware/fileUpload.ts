@@ -1,10 +1,17 @@
 import multer from 'multer';
+import fs from 'fs';
 import path from 'path';
+
+const uploadsDir = path.resolve(__dirname, '../../uploads');
+
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 // Multer storage configuration
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, 'uploads/'); // Destination folder
+        cb(null, uploadsDir);
     },
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -12,12 +19,17 @@ const storage = multer.diskStorage({
     }
 });
 
-// File filter (optional, for security)
-const fileFilter = (req: any, file: any, cb: any) => {
-    if (file.mimetype.startsWith('image/')) {
+const allowedMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+const fileFilter = (
+    req: Express.Request,
+    file: Express.Multer.File,
+    cb: multer.FileFilterCallback,
+) => {
+    if (file.mimetype && allowedMimeTypes.has(file.mimetype)) {
         cb(null, true);
     } else {
-        cb(new Error('Only images are allowed!'), false);
+        cb(new Error('Only PNG, JPEG, and WebP image uploads are supported.'));
     }
 };
 

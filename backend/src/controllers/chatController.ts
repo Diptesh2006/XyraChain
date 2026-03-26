@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import axios from 'axios';
 
+const CHATBOT_SERVICE_URL = process.env.CHATBOT_SERVICE_URL || 'http://127.0.0.1:8000/chat';
+
 // Forward message to the Python FastAPI RAG Service 
 export const handleMessage = async (req: Request, res: Response) => {
     const { message } = req.body;
@@ -10,8 +12,7 @@ export const handleMessage = async (req: Request, res: Response) => {
     }
 
     try {
-        // Call the internal Python Chatbot Service running on port 8000
-        const response = await axios.post('http://127.0.0.1:8000/chat', {
+        const response = await axios.post(CHATBOT_SERVICE_URL, {
             message: message
         });
 
@@ -23,7 +24,7 @@ export const handleMessage = async (req: Request, res: Response) => {
 
     } catch (error: any) {
         console.error('Error communicating with Chatbot Service:', error.message);
-        console.error('Ensure the chatbot server is running on port 8000.');
+        console.error(`Ensure the chatbot server is running and reachable at ${CHATBOT_SERVICE_URL}.`);
 
         // Fallback response if chatbot is down
         res.status(503).json({

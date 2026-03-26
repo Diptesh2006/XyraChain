@@ -4,3 +4,4 @@
 *.h5
 node_modules
 __pycache__
+/backend/uploads

@@ -6,14 +6,13 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const PINATA_API_KEY = process.env.PINATA_API_KEY;
-const PINATA_SECRET_API_KEY = process.env.PINATA_SECRET_API_KEY;
-
 export class PinataService {
     async uploadJSONToIPFS(jsonData: any): Promise<string> {
-        if (!PINATA_API_KEY || !PINATA_SECRET_API_KEY) {
-            console.warn("⚠️ Pinata API Keys missing in backend/.env. Returning Mock CID.");
-            return "QmMockCIDForDevelopment" + Date.now();
+        const pinataApiKey = process.env.PINATA_API_KEY;
+        const pinataSecretApiKey = process.env.PINATA_SECRET_API_KEY;
+
+        if (!pinataApiKey || !pinataSecretApiKey) {
+            throw new Error('Pinata credentials are not configured on the backend.');
         }
 
         const url = `https://api.pinata.cloud/pinning/pinJSONToIPFS`;
@@ -21,22 +20,23 @@ export class PinataService {
             const response = await axios.post(url, jsonData, {
                 headers: {
                     'Content-Type': 'application/json',
-                    'pinata_api_key': PINATA_API_KEY,
-                    'pinata_secret_api_key': PINATA_SECRET_API_KEY
+                    'pinata_api_key': pinataApiKey,
+                    'pinata_secret_api_key': pinataSecretApiKey
                 }
             });
             return response.data.IpfsHash;
         } catch (error: any) {
             console.error('Error uploading JSON to Pinata:', error?.response?.data || error.message);
-            // Fallback for development if Pinata fails
-            return "QmFallbackCID" + Date.now();
+            throw new Error(`Failed to upload report JSON to Pinata: ${error.message}`);
         }
     }
 
     async uploadFileToIPFS(filePath: string): Promise<string> {
-        if (!PINATA_API_KEY || !PINATA_SECRET_API_KEY) {
-            console.warn("⚠️ Pinata API Keys missing. Returning Mock CID.");
-            return "QmMockFileCID" + Date.now();
+        const pinataApiKey = process.env.PINATA_API_KEY;
+        const pinataSecretApiKey = process.env.PINATA_SECRET_API_KEY;
+
+        if (!pinataApiKey || !pinataSecretApiKey) {
+            throw new Error('Pinata credentials are not configured on the backend.');
         }
 
         const url = `https://api.pinata.cloud/pinning/pinFileToIPFS`;
@@ -63,8 +63,8 @@ export class PinataService {
                 maxBodyLength: Infinity, // Important for large files
                 headers: {
                     ...data.getHeaders(), // Important for form-data
-                    'pinata_api_key': PINATA_API_KEY,
-                    'pinata_secret_api_key': PINATA_SECRET_API_KEY
+                    'pinata_api_key': pinataApiKey,
+                    'pinata_secret_api_key': pinataSecretApiKey
                 }
             });
             return response.data.IpfsHash;
